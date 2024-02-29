@@ -610,11 +610,8 @@ func ServerTransportCredentials(cacertFile, serverCertFile, serverKeyFile string
 // and blocking until the returned connection is ready. If the given credentials are nil, the
 // connection will be insecure (plain-text).
 func BlockingDial(ctx context.Context, network, address string, creds credentials.TransportCredentials, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
-	if creds == nil {
-		creds = insecure.NewCredentials()
-	}
-
 	var err error
+	var path string
 	if strings.HasPrefix(address, "xds:///") {
 		// The xds:/// prefix is used to signal to the gRPC client to use an xDS server to resolve the
 		// target. The relevant credentials will be automatically pulled from the GRPC_XDS_BOOTSTRAP or
@@ -622,6 +619,15 @@ func BlockingDial(ctx context.Context, network, address string, creds credential
 		creds, err = xdsCredentials.NewClientCredentials(xdsCredentials.ClientOptions{FallbackCreds: creds})
 		if err != nil {
 			return nil, err
+		}
+	} else {
+		idx := strings.Index(address, "/")
+		if idx != -1 {
+			address, path = address[0:idx], address[idx:]
+			path = strings.TrimRight(path, "/")
+		}
+		if creds == nil {
+			creds = insecure.NewCredentials()
 		}
 	}
 
@@ -671,6 +677,15 @@ func BlockingDial(ctx context.Context, network, address string, creds credential
 		// But we don't want caller to be able to override these two, so we put
 		// them *after* the explicitly provided options.
 		opts = append(opts, grpc.WithBlock(), grpc.WithContextDialer(dialer), grpc.WithTransportCredentials(creds))
+
+		if path != "" {
+			opts = append(opts, grpc.WithUnaryInterceptor(func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, callOpts ...grpc.CallOption) error {
+				return invoker(ctx, path+method, req, reply, cc, callOpts...)
+			}))
+			opts = append(opts, grpc.WithStreamInterceptor(func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, callOpts ...grpc.CallOption) (grpc.ClientStream, error) {
+				return streamer(ctx, desc, cc, path+method, callOpts...)
+			}))
+		}
 
 		conn, err := grpc.DialContext(ctx, address, opts...)
 		var res interface{}
