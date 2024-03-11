@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -25,6 +26,7 @@ import (
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/desc/protoprint"
 	"github.com/jhump/protoreflect/dynamic"
+	"golang.org/x/net/proxy"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -684,6 +686,22 @@ func BlockingDial(ctx context.Context, network, address string, creds credential
 			}))
 			opts = append(opts, grpc.WithStreamInterceptor(func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, callOpts ...grpc.CallOption) (grpc.ClientStream, error) {
 				return streamer(ctx, desc, cc, path+method, callOpts...)
+			}))
+		}
+
+		socks5Proxy := os.Getenv("socks5_proxy")
+		if socks5Proxy != "" {
+			opts = append(opts, grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+				proxyURL, _ := url.Parse("socks5://" + socks5Proxy)
+				dialer, err := proxy.FromURL(proxyURL, nil)
+				if err != nil {
+					return nil, err
+				}
+				if d, ok := dialer.(proxy.ContextDialer); ok {
+					return d.DialContext(ctx, "tcp", addr)
+				} else {
+					return dialer.Dial("tcp", addr)
+				}
 			}))
 		}
 
